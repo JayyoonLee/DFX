@@ -1,7 +1,17 @@
 # -*- coding: utf-8 -*-
+"""
+DFX.py
+- GitHub Actions에서 실행
+- 로컬 리포 루트의 ./chromedriver 강제 사용
+- Cloudflare 챌린지 감지/대기/재시도
+- 결과는 스프레드시트의 각 시트(이름=쿼리)로 업로드
+"""
+
 import os
 import re
 import time
+import random
+from typing import List
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -14,6 +24,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
+
 # ================== Chrome / chromedriver (로컬 고정) ==================
 DRIVER_PATH = os.path.join(os.getcwd(), "chromedriver")
 if not os.path.exists(DRIVER_PATH):
@@ -25,14 +36,17 @@ options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
 options.add_argument("--window-size=1920,1080")
 options.add_argument("--lang=ko-KR")
+options.add_argument("--disable-blink-features=AutomationControlled")
 options.add_argument(
     "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/141.0 Safari/537.36"
 )
-# Actions에서 setup-chrome이 넘겨주는 경로가 있으면 사용
+
+# Actions의 setup-chrome이 넘겨주는 경로가 있으면 사용
 chrome_bin = os.environ.get("CHROME_BIN")
 if chrome_bin:
     options.binary_location = chrome_bin
+
 # 자동화 흔적 최소화
 options.add_experimental_option("excludeSwitches", ["enable-automation"])
 options.add_experimental_option("useAutomationExtension", False)
@@ -42,11 +56,13 @@ wait = WebDriverWait(driver, 10)
 
 # navigator.webdriver 감추기
 try:
-    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-    })
+    driver.execute_cdp_cmd(
+        "Page.addScriptToEvaluateOnNewDocument",
+        {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"}
+    )
 except Exception:
     pass
+
 
 # ================== Google Sheets 인증/열기 ==================
 scope = [
@@ -62,41 +78,78 @@ SOURCE_SHEET = os.environ.get("SOURCE_SHEET", "시트원본")
 spreadsheet = client.open_by_key(SPREADSHEET_ID)
 sheet_for_url = spreadsheet.worksheet(SOURCE_SHEET)
 
+
 # ================== 유틸 ==================
 FORBIDDEN = r'[:\\/\?\*\[\]]'
+
 def sanitize_title(name: str) -> str:
     title = re.sub(FORBIDDEN, "_", (name or "").strip())
     return title[:100] or "EMPTY_NAME"
 
+def human_pause(base: float = 2.0, jitter: float = 1.5) -> None:
+    """사람처럼 랜덤 쉬기"""
+    time.sleep(base + random.uniform(0, jitter))
+
+def is_cf_challenge() -> bool:
+    """Cloudflare 챌린지 페이지 감지"""
+    try:
+        t = (driver.title or "").lower()
+        if "just a moment" in t or "attention required" in t:
+            return True
+        src = (driver.page_source or "").lower()
+        return ("challenge-error-text" in src) or ("cf-chl-bypass" in src) or ("cf-challenge" in src)
+    except Exception:
+        return False
+
+
 # ================== 크롤러 ==================
-def scrape_one(query_name: str):
+def scrape_one(query_name: str) -> List[List[str]]:
     """ 검색 결과 → [ [캐릭터명, 랭킹딜량, 버프점수], ... ] """
     url = f"https://dundam.xyz/search?server=adven&name={query_name}"
-    rows = []
+    rows: List[List[str]] = []
 
-    # 가벼운 재시도 2회
-    for _ in range(2):
+    max_attempts = 4        # 챌린지 포함 최대 재시도
+    cf_wait_base = 12.0     # 챌린지 감지 시 대기(초) (증가적용)
+
+    for attempt in range(1, max_attempts + 1):
         driver.get(url)
+
+        # 문서 로드 완료까지만 짧게
         try:
-            # 문서 로드 완료까지만 짧게
             WebDriverWait(driver, 6).until(
                 lambda d: d.execute_script("return document.readyState") == "complete"
             )
         except TimeoutException:
             pass
 
-        # 결과 카드/컨테이너 등장 대기(최대 6초)
+        # CF 챌린지 대응
+        if is_cf_challenge():
+            wait_s = cf_wait_base * attempt  # 12s, 24s, 36s, 48s...
+            print(f"[CF] challenge detected for '{query_name}'. waiting {wait_s:.1f}s and retry...")
+            time.sleep(wait_s)
+            driver.refresh()
+            human_pause(1.0, 1.0)
+            if is_cf_challenge():
+                # 다음 루프로 재시도
+                continue
+
+        # 결과 카드 등장 대기 (너무 오래 안 기다림)
         try:
             WebDriverWait(driver, 6).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "div.scon"))
             )
         except TimeoutException:
+            # 잠깐 쉬고 재시도
+            human_pause(1.0, 1.0)
             continue
 
         cards = driver.find_elements(By.CSS_SELECTOR, "div.scon")
         if not cards:
+            # 잠깐 쉬고 재시도
+            human_pause(1.2, 1.0)
             continue
 
+        # --------- 파싱 ----------
         for card in cards:
             # 캐릭터명
             try:
@@ -132,16 +185,25 @@ def scrape_one(query_name: str):
 
             rows.append([name, ranking_damage, buff_score])
 
+        # 파싱 성공 → 루프 종료
         if rows:
             break
 
-    # 디버그: 0건이면 HTML 일부를 로그로
     if not rows:
-        snippet = driver.page_source[:1000].replace("\n", " ")
-        print(f"[WARN] '{query_name}' 결과 0건. HTML 앞부분: {snippet}")
+        # 디버그: 0건이면 간단 정보 찍기(로그에서 확인)
+        try:
+            snippet = (driver.title + " | " + driver.current_url)[:200]
+        except Exception:
+            snippet = "n/a"
+        print(f"[WARN] '{query_name}' 0건. info: {snippet}")
+    else:
+        # 다음 요청 전 쿨다운 (봇탐지 완화)
+        human_pause(3.0, 2.5)
+
     return rows
 
-def upload_to_sheet(title: str, data: list[list[str]]):
+
+def upload_to_sheet(title: str, data: List[List[str]]) -> None:
     title = sanitize_title(title)
     try:
         ws = spreadsheet.worksheet(title)
@@ -150,6 +212,16 @@ def upload_to_sheet(title: str, data: list[list[str]]):
 
     body = [["캐릭터명", "랭킹딜량", "버프점수"]] + (data or [])
     ws.update("A1", body, value_input_option="RAW")
+
+
+# ================== 워밍업(선택) ==================
+# 첫 접속 때 챌린지가 자주 떠서, 루트로 먼저 접속 후 8초 대기
+try:
+    driver.get("https://dundam.xyz/")
+    time.sleep(8)
+except Exception:
+    pass
+
 
 # ================== 메인 ==================
 row = 6  # A6부터, 4칸 간격
