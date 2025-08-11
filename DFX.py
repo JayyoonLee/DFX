@@ -1,121 +1,107 @@
 # -*- coding: utf-8 -*-
-import os
-import re
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+import os
+import time
 
 # ===== 설정 =====
-QUERY_NAME = "재윤단"  # 검색할 이름
-SHEET_NAME = "재윤단"  # 업로드할 시트명
-SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1tAHVNClKju6lzQm_PYhN7A1m5Hm0QRmejd_TdbWT_tw")
-DRIVER_PATH = os.path.join(os.getcwd(), "chromedriver")
+QUERY_NAME = "니치니치"   # 검색할 이름 (고정)
+SHEET_NAME = "니치니치"   # 업로드할 시트명 (고정)
+SPREADSHEET_ID = "1tAHVNClKju6lzQm_PYhN7A1m5Hm0QRmejd_TdbWT_tw"
 
-# ===== Chrome 설정 =====
-options = Options()
-options.add_argument("--headless=new")
-options.add_argument("--no-sandbox")
-options.add_argument("--disable-dev-shm-usage")
-options.add_argument("--window-size=1920,1080")
-options.add_argument("--lang=ko-KR")
-options.add_argument("--disable-blink-features=AutomationControlled")
-options.add_experimental_option("excludeSwitches", ["enable-automation"])
-options.add_experimental_option("useAutomationExtension", False)
+# ===== 크롬드라이버 / 구글 시트 인증 =====
+# (로컬 chromedriver를 쓰는 경우: repo 루트의 ./chromedriver 사용)
+chromedriver_path = os.path.join(os.getcwd(), "chromedriver")
+options = webdriver.ChromeOptions()
+options.add_argument('--headless=new')
+options.add_argument('--no-sandbox')
+options.add_argument('--disable-dev-shm-usage')
 
+# GitHub Actions에서 setup-chrome이 CHROME_BIN을 줄 수 있음
 chrome_bin = os.environ.get("CHROME_BIN")
 if chrome_bin:
     options.binary_location = chrome_bin
 
-driver = webdriver.Chrome(service=Service(DRIVER_PATH), options=options)
-wait = WebDriverWait(driver, 6)
+driver = webdriver.Chrome(service=Service(chromedriver_path), options=options)
 
-try:
-    driver.execute_cdp_cmd(
-        "Page.addScriptToEvaluateOnNewDocument",
-        {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"}
-    )
-except Exception:
-    pass
-
-# ===== Google Sheets 인증 =====
 scope = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
 ]
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 client = gspread.authorize(creds)
 spreadsheet = client.open_by_key(SPREADSHEET_ID)
 
-# ===== 크롤링 =====
-def scrape_one(name):
-    url = f"https://dundam.xyz/search?server=adven&name={name}"
-    driver.get(url)
+# ===== 크롤링 (한 개만) =====
+url = f"https://dundam.xyz/search?server=adven&name={QUERY_NAME}"
+driver.get(url)
+time.sleep(2)
+
+cards = driver.find_elements(By.CSS_SELECTOR, "div.scon")
+results = []
+
+for card in cards:
+    # 캐릭터명
     try:
-        wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.scon")))
-    except:
-        print(f"[WARN] '{name}' 결과 없음 또는 로딩 실패")
-        return []
+        name_elem = card.find_element(By.CSS_SELECTOR, ".seh_name > .name")
+        name = name_elem.text.split("\n")[0].strip()
+    except Exception:
+        name = ""
 
-    cards = driver.find_elements(By.CSS_SELECTOR, "div.scon")
-    rows = []
-    for card in cards:
-        # 캐릭터명
-        try:
-            nm = card.find_element(By.CSS_SELECTOR, ".seh_name > .name").text.split("\n")[0].strip()
-        except:
-            nm = ""
-        # 랭킹딜량
-        rk = ""
-        try:
-            stat_a = card.find_element(By.CSS_SELECTOR, "ul.stat_a")
-            for sc in stat_a.find_elements(By.CSS_SELECTOR, "div.statc"):
-                tl = sc.find_element(By.CSS_SELECTOR, "span.tl").text.strip()
-                val = sc.find_element(By.CSS_SELECTOR, "span.val").text.strip()
-                if "랭킹" in tl:
-                    rk = val
-                    break
-        except:
-            pass
-        # 버프점수
-        bf = ""
-        try:
-            stat_b = card.find_element(By.CSS_SELECTOR, "ul.stat_b")
-            m = {}
-            for sc in stat_b.find_elements(By.CSS_SELECTOR, "div.statc"):
-                tl = sc.find_element(By.CSS_SELECTOR, "span.tl").text.strip()
-                val = sc.find_element(By.CSS_SELECTOR, "span.val").text.strip()
-                m[tl] = val
-            bf = m.get("버프점수") or m.get("4인") or ""
-        except:
-            pass
-        rows.append([nm, rk, bf])
-    return rows
-
-# ===== 시트 업로드 =====
-def upload_to_sheet(sheet_name, data):
-    sheet_name = re.sub(r'[:\\/\?\*\[\]]', "_", (sheet_name or "").strip())[:100] or "EMPTY_NAME"
+    # 랭킹딜량
+    ranking_damage = ""
     try:
-        ws = spreadsheet.worksheet(sheet_name)
-    except gspread.exceptions.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title=sheet_name, rows="200", cols="20")
-    body = [["캐릭터명", "랭킹딜량", "버프점수"]] + (data or [])
-    ws.append("A1", body, value_input_option="RAW")
+        stat_a = card.find_element(By.CSS_SELECTOR, "ul.stat_a")
+        for statc in stat_a.find_elements(By.CSS_SELECTOR, "div.statc"):
+            label = statc.find_element(By.CSS_SELECTOR, "span.tl").text.strip()
+            val = statc.find_element(By.CSS_SELECTOR, "span.val").text.strip()
+            if "랭킹" in label:
+                ranking_damage = val
+                break
+    except Exception:
+        pass
 
-# ===== 실행 =====
-data = scrape_one(QUERY_NAME)
-upload_to_sheet(SHEET_NAME, data)
-print(f"{SHEET_NAME} 업로드 완료! (총 {len(data)}건)")
+    # 버프점수
+    buff_score = ""
+    try:
+        stat_b = card.find_element(By.CSS_SELECTOR, "ul.stat_b")
+        scores = {}
+        for statc in stat_b.find_elements(By.CSS_SELECTOR, "div.statc"):
+            label = statc.find_element(By.CSS_SELECTOR, "span.tl").text.strip()
+            val = statc.find_element(By.CSS_SELECTOR, "span.val").text.strip()
+            scores[label] = val
+        buff_score = scores.get("버프점수") or scores.get("4인") or ""
+    except Exception:
+        pass
+
+    results.append([name, ranking_damage, buff_score])
+
+# ===== 시트에 누적 append =====
+try:
+    worksheet = spreadsheet.worksheet(SHEET_NAME)
+except gspread.exceptions.WorksheetNotFound:
+    worksheet = spreadsheet.add_worksheet(title=SHEET_NAME, rows="200", cols="20")
+
+# 헤더가 없으면 한 번만 추가
+try:
+    if not worksheet.acell("A1").value:
+        worksheet.append_row(["캐릭터명", "랭킹딜량", "버프점수"], value_input_option="RAW")
+except Exception:
+    # acell 실패시에도 헤더 보장
+    worksheet.append_row(["캐릭터명", "랭킹딜량", "버프점수"], value_input_option="RAW")
+
+# 데이터 누적
+if results:
+    worksheet.append_rows(results, value_input_option="RAW")
+
+print(f"{SHEET_NAME} 업로드 완료! (총 {len(results)}건)")
 
 try:
     driver.quit()
-except:
+except Exception:
     pass
 
 print("모든 작업 완료!")
-
