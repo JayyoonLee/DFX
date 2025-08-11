@@ -1,6 +1,14 @@
+import os
+import re
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import re
 
 # --- Selenium 옵션 보강 ---
 options = Options()
@@ -126,3 +134,4 @@ while True:
     upload_to_sheet(name, data)
     print(f"{name} 업로드 완료! (총 {len(data)}건)")
     row += 4
+
