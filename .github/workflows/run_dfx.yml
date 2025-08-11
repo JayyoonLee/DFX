@@ -5,12 +5,18 @@ on:
     - cron: "0 * * * *"   # 매 정시(UTC)
   workflow_dispatch:
 
+# ✅ 리포에 쓰기 권한 부여
+permissions:
+  contents: write
+
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}   # 기본 제공 토큰(쓰기 권한 열림)
 
       - name: Setup Google Chrome
         uses: browser-actions/setup-chrome@v1
@@ -50,28 +56,34 @@ jobs:
         run: chmod +x ./chromedriver
 
       - name: Run DFX.py
+        id: run_dfx
+        continue-on-error: true   # 실패해도 다음 단계로 진행(로그 남기기 위해)
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
           PATH: /usr/local/bin:/bin:/usr/sbin:/sbin
         run: |
           set -e
           python DFX.py
-        continue-on-error: true
-        id: run_dfx
 
-      - name: Record run result with timestamp
+      # ✅ KST 기준 누적 로그 남기기
+      - name: Append run result (KST)
+        if: always()
         run: |
-          KST_TIME=$(date -d '+9 hours' '+%Y/%m/%d %H:%M')
+          KST_TIME=$(TZ="Asia/Seoul" date "+%Y/%m/%d %H:%M")
           if [ "${{ steps.run_dfx.outcome }}" = "success" ]; then
             echo "$KST_TIME Success" >> last_run.txt
           else
             echo "$KST_TIME Fail" >> last_run.txt
           fi
+          tail -n 5 last_run.txt || true
 
+      # ✅ 커밋/푸시 (쓰기권한 필요)
       - name: Commit and push log
+        if: always()
         run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
           git add last_run.txt
-          git commit -m "Update last run log"
-          git push
+          git commit -m "Update last run log" || echo "No changes to commit"
+          git push origin HEAD:main
