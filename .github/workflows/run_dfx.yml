@@ -33,6 +33,9 @@ jobs:
       - name: Setup Google Chrome
         uses: browser-actions/setup-chrome@v1
         id: chrome
+        
+      - name: Remove old chromedriver from PATH
+        run: sudo rm -f /usr/bin/chromedriver
 
       # 5) Python 패키지 설치
       - name: Install Python dependencies
