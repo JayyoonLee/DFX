@@ -105,7 +105,7 @@ def upload_to_sheet(sheet_name, data):
     except gspread.exceptions.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title=sheet_name, rows="200", cols="20")
     body = [["캐릭터명", "랭킹딜량", "버프점수"]] + (data or [])
-    ws.update("A1", body, value_input_option="RAW")
+    ws.append("A1", body, value_input_option="RAW")
 
 # ===== 실행 =====
 data = scrape_one(QUERY_NAME)
@@ -118,3 +118,4 @@ except:
     pass
 
 print("모든 작업 완료!")
+
