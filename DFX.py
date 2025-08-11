@@ -12,7 +12,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 # ===== 설정 =====
-QUERY_NAME = "니치니치"  # 검색할 이름
+QUERY_NAME = "재윤단"  # 검색할 이름
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1tAHVNClKju6lzQm_PYhN7A1m5Hm0QRmejd_TdbWT_tw")
 DRIVER_PATH = os.path.join(os.getcwd(), "chromedriver")
 
@@ -362,4 +362,5 @@ except Exception:
     pass
 
 print("모든 작업 완료!")
+
 
