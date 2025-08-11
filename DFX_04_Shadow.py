@@ -11,8 +11,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
 # ===== 고정 설정 =====
-QUERY_NAME  = "니치니치"   # 검색 이름 (하나만)
-SHEET_NAME  = "니치니치"   # 업로드 시트명 (고정)
+QUERY_NAME  = "그림자단"   # 검색 이름 (하나만)
+SHEET_NAME  = "그림자단"   # 업로드 시트명 (고정)
 SPREADSHEET_ID = "1tAHVNClKju6lzQm_PYhN7A1m5Hm0QRmejd_TdbWT_tw"
 CHROMEDRIVER_PATH = os.path.join(os.getcwd(), "chromedriver")  # 리포 루트의 드라이버
 
@@ -149,3 +149,4 @@ try:
 except Exception:
     pass
 print("모든 작업 완료!")
+
