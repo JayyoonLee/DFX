@@ -57,8 +57,7 @@ jobs:
       - name: Run DFX.py
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-          PATH: /usr/local/bin:/usr/bin:/bin  # /usr/bin/chromedriver 제외
+          PATH: /usr/local/bin:/bin:/usr/sbin:/sbin  # /usr/bin 제거
         run: |
-          which chromedriver || echo "chromedriver not found - good"
+          which chromedriver || echo "✅ chromedriver 없음"
           python DFX.py
-
