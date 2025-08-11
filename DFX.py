@@ -1,57 +1,60 @@
 import os
-import stat
 import time
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-# ============ Selenium 설정 (리눅스/GitHub Actions 호환) ============
+
+# ================== Selenium (GitHub Actions 친화) ==================
 options = Options()
 options.add_argument("--headless=new")
 options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
-# setup-chrome 액션이 설정한 경로가 환경변수로 들어오면 그걸 사용
-options.binary_location = os.environ.get("CHROME_BIN", "/usr/bin/google-chrome")
+options.add_argument("--window-size=1920,1080")
+# GitHub Actions에서 setup-chrome 사용 시 CHROME_BIN이 잡힘. 없으면 기본값 사용
+chrome_bin = os.environ.get("CHROME_BIN")
+if chrome_bin:
+    options.binary_location = chrome_bin
 
-# 리포 루트에 업로드한 chromedriver 사용 (확장자 없음, 리눅스용)
-DRIVER_PATH = os.path.join(os.getcwd(), "chromedriver")
+# Selenium Manager가 자동으로 드라이버를 받으므로 Service 경로 지정 불필요
+driver = webdriver.Chrome(options=options)
+wait = WebDriverWait(driver, 10)  # 엘리먼트 대기 최대 10초
 
-# 웹으로 올리면 실행 권한이 빠질 수 있으므로 강제로 실행 권한 부여
-try:
-    os.chmod(DRIVER_PATH, os.stat(DRIVER_PATH).st_mode | stat.S_IEXEC)
-except Exception:
-    pass  # 권한이 이미 있거나 로컬 실행 환경에서 불필요할 수 있음
 
-driver = webdriver.Chrome(service=Service(DRIVER_PATH), options=options)
-
-# ============ Google Sheets 인증 ============
+# ================== Google Sheets 인증 ==================
+# 권장: 워크플로우에서 secrets로 credentials.json 파일 생성 후 사용
 scope = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
-# 워크플로우에서 secrets로 만든 credentials.json 사용 (로컬도 동일 경로에 두면 됨)
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 client = gspread.authorize(creds)
 
-# 스프레드시트/시트 열기
-spreadsheet = client.open_by_key("1tAHVNClKju6lzQm_PYhN7A1m5Hm0QRmejd_TdbWT_tw")
-sheet_for_url = spreadsheet.worksheet("시트원본")
+# 환경변수로 관리하면 브랜치/프로젝트 간 재사용 쉬움 (없으면 하드코드된 기본값 사용)
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1tAHVNClKju6lzQm_PYhN7A1m5Hm0QRmejd_TdbWT_tw")
+SOURCE_SHEET = os.environ.get("SOURCE_SHEET", "시트원본")
 
-# ============ 스크래핑 루프 ============
-row = 6  # A6부터 시작, 4칸씩 증가
-while True:
-    cell_addr = f"A{row}"
-    value = sheet_for_url.acell(cell_addr).value
-    if not value:
-        break
+spreadsheet = client.open_by_key(SPREADSHEET_ID)
+sheet_for_url = spreadsheet.worksheet(SOURCE_SHEET)
 
-    query_name = value.strip()
+
+# ================== 헬퍼 ==================
+def scrape_one(query_name: str):
+    """단일 캐릭터 검색 결과를 파싱해서 리스트[dict]로 반환."""
     url = f"https://dundam.xyz/search?server=adven&name={query_name}"
     driver.get(url)
-    time.sleep(2.0)  # 간단 대기 (사이트 느리면 3~4로 늘려도 됨)
+
+    # 결과 카드 영역이 로드될 때까지 대기 (없을 수도 있으니 타임아웃은 허용)
+    try:
+        wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.scon")))
+    except Exception:
+        # 결과 없거나 레이아웃 변경된 경우도 있으므로 계속 진행
+        pass
 
     cards = driver.find_elements(By.CSS_SELECTOR, "div.scon")
     results = []
@@ -70,9 +73,9 @@ while True:
             stat_a = card.find_element(By.CSS_SELECTOR, "ul.stat_a")
             for statc in stat_a.find_elements(By.CSS_SELECTOR, "div.statc"):
                 label = statc.find_element(By.CSS_SELECTOR, "span.tl").text.strip()
-                value = statc.find_element(By.CSS_SELECTOR, "span.val").text.strip()
+                val = statc.find_element(By.CSS_SELECTOR, "span.val").text.strip()
                 if "랭킹" in label:
-                    ranking_damage = value
+                    ranking_damage = val
                     break
         except Exception:
             pass
@@ -84,44 +87,53 @@ while True:
             scores = {}
             for statc in stat_b.find_elements(By.CSS_SELECTOR, "div.statc"):
                 label = statc.find_element(By.CSS_SELECTOR, "span.tl").text.strip()
-                value = statc.find_element(By.CSS_SELECTOR, "span.val").text.strip()
-                scores[label] = value
+                val = statc.find_element(By.CSS_SELECTOR, "span.val").text.strip()
+                scores[label] = val
             buff_score = scores.get("버프점수") or scores.get("4인")
         except Exception:
             pass
 
         results.append({
-            "캐릭터명": name,
-            "랭킹딜량": ranking_damage,
-            "버프점수": buff_score
+            "캐릭터명": name or "",
+            "랭킹딜량": ranking_damage or "",
+            "버프점수": buff_score or "",
         })
 
-    # 결과 업로드: 시트명은 query_name
+    return results
+
+
+def upload_to_sheet(title: str, rows: list[dict]):
+    """결과를 시트(이름=title)에 업로드. 기존 내용 초기화 후 헤더+데이터."""
     try:
-        worksheet = spreadsheet.worksheet(query_name)
+        ws = spreadsheet.worksheet(title)
     except gspread.exceptions.WorksheetNotFound:
-        worksheet = spreadsheet.add_worksheet(title=query_name, rows="200", cols="20")
+        ws = spreadsheet.add_worksheet(title=title, rows="200", cols="20")
 
-    worksheet.clear()
-    worksheet.append_row(["캐릭터명", "랭킹딜량", "버프점수"])
+    ws.clear()
+    ws.append_row(["캐릭터명", "랭킹딜량", "버프점수"])
 
-    rows_to_upload = [
-        [
-            r.get("캐릭터명") or "",
-            r.get("랭킹딜량") or "",
-            r.get("버프점수") or "",
-        ]
-        for r in results
-    ]
-    if rows_to_upload:
-        worksheet.append_rows(rows_to_upload)
+    if rows:
+        ws.append_rows([[r["캐릭터명"], r["랭킹딜량"], r["버프점수"]] for r in rows])
 
-    print(f"{query_name} 업로드 완료!")
+
+# ================== 메인 루프 ==================
+row = 6  # A6부터 시작 (4칸 간격)
+while True:
+    cell_addr = f"A{row}"
+    value = sheet_for_url.acell(cell_addr).value
+    if not value:
+        break
+
+    query_name = value.strip()
+    results = scrape_one(query_name)
+    upload_to_sheet(query_name, results)
+    print(f"{query_name} 업로드 완료! (총 {len(results)}건)")
+
     row += 4
 
 print("모든 작업 완료!")
 
-# 종료 (CI 환경이면 없어도 대부분 문제 없지만, 깔끔하게 닫자)
+# 종료
 try:
     driver.quit()
 except Exception:
