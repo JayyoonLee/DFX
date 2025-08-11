@@ -3,98 +3,55 @@ name: Run DFX hourly
 on:
   schedule:
     - cron: "0 * * * *"   # 매 정시(UTC) = KST +9
-  workflow_dispatch:
+  workflow_dispatch:       # 수동 실행도 가능
 
 jobs:
   run:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      # 1) 레포 체크아웃
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2) Python 세팅
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      - name: Setup Google Chrome (for Selenium)
-        id: chrome
-        uses: browser-actions/setup-chrome@v1
+      # 3) pip 캐시 (속도 향상)
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
-      - name: Install Python deps
+      # 4) Chrome 설치
+      - name: Setup Google Chrome
+        uses: browser-actions/setup-chrome@v1
+        id: chrome
+
+      # 5) Python 패키지 설치
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install "selenium>=4.10" gspread oauth2client
 
+      # 6) credentials.json 생성 (Secrets에서)
       - name: Write credentials.json from Secret
         run: |
           echo "${{ secrets.GOOGLE_CREDENTIALS }}" > credentials.json
 
-      - name: List repository files (debug)
+      # 7) 현재 파일 구조 확인 (디버그용)
+      - name: List repository files
         run: ls -R
 
-      - name: Find DFX.py path
-        id: findscript
-        shell: bash
-        run: |
-          set -e
-          CANDIDATES=("DFX.py" "DFX/DFX.py" "scripts/DFX.py")
-          for p in "${CANDIDATES[@]}"; do
-            if [ -f "$p" ]; then
-              echo "SCRIPT_PATH=$p" >> $GITHUB_ENV
-              echo "Found: $p"
-              exit 0
-            fi
-          done
-          echo "DFX.py not found in expected locations."
-          exit 1
-
-      - name: Patch DFX.py for Actions (Linux paths & Selenium Manager)
-        shell: bash
-        run: |
-          python - <<'PY'
-          import os, re, io, sys
-          p = os.environ["SCRIPT_PATH"]
-          with io.open(p, "r", encoding="utf-8") as f:
-              s = f.read()
-
-          # 1) import os 추가 (없으면)
-          if re.search(r'^\s*import\s+os\b', s, flags=re.M) is None:
-              s = 'import os\n' + s
-
-          # 2) credentials.json 경로를 현재 디렉토리 기준으로
-          s = re.sub(
-              r'ServiceAccountCredentials\.from_json_keyfile_name\(\s*r?"[^"]*credentials\.json"',
-              'ServiceAccountCredentials.from_json_keyfile_name("credentials.json"',
-              s
-          )
-
-          # 3) chromedriver Service 하드코딩 제거 -> Selenium Manager 사용
-          #    기존: driver = webdriver.Chrome(service=Service(chromedriver_path), options=options)
-          #    변경: options.binary_location = os.environ.get("CHROME_BIN", "google-chrome")
-          #          driver = webdriver.Chrome(options=options)
-          s = re.sub(
-              r'driver\s*=\s*webdriver\.Chrome\(\s*service\s*=\s*Service\([^)]+\)\s*,\s*options\s*=\s*options\s*\)',
-              'options.binary_location = os.environ.get("CHROME_BIN", "google-chrome")\n'
-              'driver = webdriver.Chrome(options=options)',
-              s
-          )
-
-          # 4) 혹시 윈도우용 chromedriver_path 하드코딩이 있다면 무시되게 냅두거나 안전한 값으로 치환
-          s = re.sub(
-              r'chromedriver_path\s*=\s*".*?"',
-              'chromedriver_path = "/usr/bin/chromedriver"',
-              s
-          )
-
-          with io.open(p, "w", encoding="utf-8") as f:
-              f.write(s)
-          print("Patched:", p)
-          PY
-
+      # 8) DFX.py 실행
       - name: Run DFX.py
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
         run: |
-          python "$SCRIPT_PATH"
+          python DFX.py
