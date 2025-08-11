@@ -1,11 +1,10 @@
-name: Run DFX hourly
+name: Run All DFX Scripts
 
 on:
   schedule:
     - cron: "0 * * * *"   # 매 정시(UTC)
   workflow_dispatch:
 
-# ✅ 리포에 쓰기 권한 부여
 permissions:
   contents: write
 
@@ -16,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}   # 기본 제공 토큰(쓰기 권한 열림)
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Google Chrome
         uses: browser-actions/setup-chrome@v1
@@ -47,7 +46,7 @@ jobs:
           python - <<'PY'
           import os, json, pathlib
           raw = os.environ['GOOGLE_CREDENTIALS']
-          json.loads(raw)
+          json.loads(raw)  # sanity check
           pathlib.Path('credentials.json').write_text(raw, encoding='utf-8')
           print('credentials.json OK')
           PY
@@ -55,29 +54,53 @@ jobs:
       - name: Make local chromedriver executable
         run: chmod +x ./chromedriver
 
-      - name: Run DFX.py
+      - name: Run all DFX_*.py (auto-discovered)
         id: run_dfx
-        continue-on-error: true   # 실패해도 다음 단계로 진행(로그 남기기 위해)
+        continue-on-error: true        # 일부 실패해도 다음 스크립트 계속
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
           PATH: /usr/local/bin:/bin:/usr/sbin:/sbin
         run: |
-          set -e
-          python DFX.py
+          set -u  # 파이프라인 중 미정의 변수를 에러로
+          SCRIPTS=$(ls -1 DFX_*.py 2>/dev/null | sort || true)
+          if [ -z "$SCRIPTS" ]; then
+            echo "No DFX_*.py found. Nothing to run."
+            echo "result=Success" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-      # ✅ KST 기준 누적 로그 남기기
+          echo "Found scripts:"
+          echo "$SCRIPTS"
+
+          FAILS=()
+          STATUS=0
+          for script in $SCRIPTS; do
+            echo "=== Running $script ==="
+            if ! python "$script"; then
+              echo "FAILED: $script"
+              FAILS+=("$script")
+              STATUS=1
+            fi
+          done
+
+          if [ ${#FAILS[@]} -eq 0 ]; then
+            echo "result=Success" >> "$GITHUB_OUTPUT"
+          else
+            # 콤마로 조인
+            joined=$(printf "%s, " "${FAILS[@]}")
+            joined=${joined%, }
+            echo "result=Fail: $joined" >> "$GITHUB_OUTPUT"
+          fi
+
+          exit $STATUS
+
       - name: Append run result (KST)
         if: always()
         run: |
           KST_TIME=$(TZ="Asia/Seoul" date "+%Y/%m/%d %H:%M")
-          if [ "${{ steps.run_dfx.outcome }}" = "success" ]; then
-            echo "$KST_TIME Success" >> last_run.txt
-          else
-            echo "$KST_TIME Fail" >> last_run.txt
-          fi
+          echo "$KST_TIME ${{ steps.run_dfx.outputs.result }}" >> last_run.txt
           tail -n 5 last_run.txt || true
 
-      # ✅ 커밋/푸시 (쓰기권한 필요)
       - name: Commit and push log
         if: always()
         run: |
