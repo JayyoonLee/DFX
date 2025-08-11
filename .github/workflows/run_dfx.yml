@@ -39,9 +39,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install "selenium>=4.10" gspread oauth2client
 
-      # 6) credentials.json 생성 (Secrets)
-      - name: Write credentials.json from Secret
-        run: echo "${{ secrets.GOOGLE_CREDENTIALS }}" > credentials.json
+      - name: Write credentials.json safely
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          python - <<'PY'
+          import os, json, sys, pathlib
+          raw = os.environ['GOOGLE_CREDENTIALS']
+          # 유효성 검사
+          data = json.loads(raw)
+          pathlib.Path('credentials.json').write_text(raw, encoding='utf-8')
+          print('credentials.json written OK')
+          PY
 
       # 7) 업로드한 chromedriver 실행 권한 부여
       - name: Make local chromedriver executable
