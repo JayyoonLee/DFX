@@ -26,6 +26,7 @@ jobs:
         with:
           python-version: "3.10"
 
+      # pip 캐시: requirements.txt 해시 기준
       - name: Cache pip
         uses: actions/cache@v4
         with:
@@ -37,7 +38,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "selenium>=4.10" gspread oauth2client
+          pip install -r requirements.txt
 
       - name: Write credentials.json safely
         env:
@@ -61,7 +62,7 @@ jobs:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
           PATH: /usr/local/bin:/bin:/usr/sbin:/sbin
         run: |
-          set -u  # 파이프라인 중 미정의 변수를 에러로
+          set -u
           SCRIPTS=$(ls -1 DFX_*.py 2>/dev/null | sort || true)
           if [ -z "$SCRIPTS" ]; then
             echo "No DFX_*.py found. Nothing to run."
@@ -86,7 +87,6 @@ jobs:
           if [ ${#FAILS[@]} -eq 0 ]; then
             echo "result=Success" >> "$GITHUB_OUTPUT"
           else
-            # 콤마로 조인
             joined=$(printf "%s, " "${FAILS[@]}")
             joined=${joined%, }
             echo "result=Fail: $joined" >> "$GITHUB_OUTPUT"
