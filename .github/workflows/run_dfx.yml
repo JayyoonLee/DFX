@@ -9,22 +9,18 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      # 1) 코드 체크아웃
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2) Chrome 설치 (브라우저만 필요)
       - name: Setup Google Chrome
         uses: browser-actions/setup-chrome@v1
         id: chrome
 
-      # 3) Python 세팅
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      # 4) pip 캐시(선택)
       - name: Cache pip
         uses: actions/cache@v4
         with:
@@ -33,13 +29,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # 5) 필요 패키지 설치
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install "selenium>=4.10" gspread oauth2client
 
-      # 6) credentials.json 안전하게 생성 (echo 사용 금지)
       - name: Write credentials.json safely
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
@@ -47,26 +41,37 @@ jobs:
           python - <<'PY'
           import os, json, pathlib
           raw = os.environ['GOOGLE_CREDENTIALS']
-          json.loads(raw)  # 유효성 검증
+          json.loads(raw)
           pathlib.Path('credentials.json').write_text(raw, encoding='utf-8')
           print('credentials.json OK')
           PY
 
-      # 7) 업로드한 chromedriver 실행 권한 부여
       - name: Make local chromedriver executable
         run: chmod +x ./chromedriver
 
-      # 8) 버전 확인(선택)
-      - name: Show versions
-        env:
-          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-        run: |
-          "$CHROME_BIN" --version
-          ./chromedriver --version || true
-
-      # 9) 실행 (/usr/bin 제외해 구버전 충돌 방지)
       - name: Run DFX.py
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-          PATH: /usr/local/bin:/bin:/usr/sbin:/sbin   # /usr/bin 제외
-        run: python DFX.py
+          PATH: /usr/local/bin:/bin:/usr/sbin:/sbin
+        run: |
+          set -e
+          python DFX.py
+        continue-on-error: true
+        id: run_dfx
+
+      - name: Record run result with timestamp
+        run: |
+          KST_TIME=$(date -d '+9 hours' '+%Y/%m/%d %H:%M')
+          if [ "${{ steps.run_dfx.outcome }}" = "success" ]; then
+            echo "$KST_TIME Success" >> last_run.txt
+          else
+            echo "$KST_TIME Fail" >> last_run.txt
+          fi
+
+      - name: Commit and push log
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add last_run.txt
+          git commit -m "Update last run log"
+          git push
