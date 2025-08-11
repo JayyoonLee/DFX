@@ -4,19 +4,22 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 
 # ----- Selenium (GitHub Actions 리눅스 호환) -----
 options = Options()
 options.add_argument("--headless=new")
 options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
-# setup-chrome 액션이 제공하는 경로 사용 (없으면 기본값 시도)
 options.binary_location = os.environ.get("CHROME_BIN", "/usr/bin/google-chrome")
 
-# Selenium 4: 드라이버 자동 관리 (chromedriver 경로 지정 불필요)
-driver = webdriver.Chrome(options=options)
-
+# webdriver-manager로 Chrome 버전에 맞는 드라이버 자동 설치
+driver = webdriver.Chrome(
+    service=Service(ChromeDriverManager().install()),
+    options=options
+)
 # ----- Google 인증 -----
 scope = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -105,3 +108,4 @@ while True:
 
 driver.quit()
 print("모든 작업 완료!")
+
