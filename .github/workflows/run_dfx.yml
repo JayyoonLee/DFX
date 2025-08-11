@@ -44,14 +44,13 @@ jobs:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
           python - <<'PY'
-          import os, json, sys, pathlib
+          import os, json, pathlib
           raw = os.environ['GOOGLE_CREDENTIALS']
-          # 유효성 검사
-          data = json.loads(raw)
+          # 유효성 검사(여기서 실패하면 시크릿 자체가 잘못된 것)
+          json.loads(raw)
           pathlib.Path('credentials.json').write_text(raw, encoding='utf-8')
-          print('credentials.json written OK')
+          print('credentials.json OK')
           PY
-
       # 7) 업로드한 chromedriver 실행 권한 부여
       - name: Make local chromedriver executable
         run: chmod +x ./chromedriver
