@@ -2,7 +2,7 @@ name: Run All DFX Scripts
 
 on:
   schedule:
-    - cron: "0 */2 * * *"   # 매 정시(UTC)
+    - cron: "*/10 * * * *"   # 매 정시(UTC)
   workflow_dispatch:
 
 permissions:
