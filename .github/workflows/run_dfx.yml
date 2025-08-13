@@ -1,4 +1,4 @@
-name: DFX.py per tenmin
+name: DFX.py_10min
 
 on:
   schedule:
