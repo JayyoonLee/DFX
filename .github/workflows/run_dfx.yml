@@ -1,12 +1,16 @@
-name: Run All DFX Scripts
+name: DFX.py per tenmin
 
 on:
   schedule:
-    - cron: "*/10 * * * *"  
+    - cron: "*/10 * * * *"  # 매 10분
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: dfx-log-main
+  cancel-in-progress: true
 
 jobs:
   run:
@@ -16,6 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0  # rebase/merge 안전
 
       - name: Setup Google Chrome
         uses: browser-actions/setup-chrome@v1
@@ -53,7 +58,7 @@ jobs:
           PY
 
       - name: Make local chromedriver executable
-        run: chmod +x ./chromedriver
+        run: chmod +x ./chromedriver || true
 
       - name: Run all DFX_*.py (auto-discovered)
         id: run_dfx
@@ -94,19 +99,32 @@ jobs:
 
           exit $STATUS
 
-      - name: Append run result (KST)
-        if: always()
-        run: |
-          KST_TIME=$(TZ="Asia/Seoul" date "+%Y/%m/%d %H:%M")
-          echo "$KST_TIME ${{ steps.run_dfx.outputs.result }}" >> last_run.txt
-          tail -n 5 last_run.txt || true
-
-      - name: Commit and push log
+      # 로그 작성 전 최신본 동기화
+      - name: Sync main before logging
         if: always()
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main || true
+
+      - name: Append run result (KST)
+        if: always()
+        run: |
+          KST_TIME=$(TZ="Asia/Seoul" date "+%Y/%m/%d %H:%M")
+          printf "%s %s\n" "$KST_TIME" "${{ steps.run_dfx.outputs.result }}" >> last_run.txt
+          tail -n 5 last_run.txt || true
+
+      - name: Commit and push log (with retry)
+        if: always()
+        run: |
           git add last_run.txt
           git commit -m "Update last run log" || echo "No changes to commit"
-          git push origin HEAD:main
+          n=0
+          until [ $n -ge 5 ]
+          do
+            git push origin HEAD:main && break
+            n=$((n+1))
+            echo "Push failed. Rebase and retry ($n/5)"
+            git pull --rebase origin main || true
+            sleep 2
+          done
