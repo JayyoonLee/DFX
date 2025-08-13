@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0  # rebase/merge 안전
+          fetch-depth: 0  # 필요 시 히스토리 사용
 
       - name: Setup Google Chrome
         uses: browser-actions/setup-chrome@v1
@@ -99,32 +99,34 @@ jobs:
 
           exit $STATUS
 
-      # 로그 작성 전 최신본 동기화
-      - name: Sync main before logging
-        if: always()
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main || true
-
-      - name: Append run result (KST)
+      # 👇 레포에 커밋/파일 생성 없이, 콘솔 + Job Summary에만 결과 출력
+      - name: Show run result (console & summary)
         if: always()
         run: |
           KST_TIME=$(TZ="Asia/Seoul" date "+%Y/%m/%d %H:%M")
-          printf "%s %s\n" "$KST_TIME" "${{ steps.run_dfx.outputs.result }}" >> last_run.txt
-          tail -n 5 last_run.txt || true
+          RESULT="${{ steps.run_dfx.outputs.result }}"
+          LINE="$KST_TIME $RESULT"
 
-      - name: Commit and push log (with retry)
-        if: always()
-        run: |
-          git add last_run.txt
-          git commit -m "Update last run log" || echo "No changes to commit"
-          n=0
-          until [ $n -ge 5 ]
-          do
-            git push origin HEAD:main && break
-            n=$((n+1))
-            echo "Push failed. Rebase and retry ($n/5)"
-            git pull --rebase origin main || true
-            sleep 2
-          done
+          # 콘솔에 한 줄 출력 (예: 2025/08/13 10:30 Fail: DFX_08_Soobin.py)
+          echo "$LINE"
+
+          # 실패 목록을 보기 좋게 정리
+          if echo "$RESULT" | grep -q '^Fail:'; then
+            FAILS=$(echo "$RESULT" | sed 's/^Fail: //')
+            echo ""
+            echo "Failed scripts:"
+            echo "$FAILS" | tr ',' '\n' | sed 's/^ *//'
+          fi
+
+          # Job Summary(상단 Results 탭)에도 표시
+          {
+            echo "### DFX run result"
+            echo ""
+            echo "\`$LINE\`"
+            if echo "$RESULT" | grep -q '^Fail:'; then
+              echo ""
+              echo "**Failed scripts:**"
+              echo ""
+              echo "$FAILS" | tr ',' '\n' | sed 's/^ *//' | sed 's/^/- /'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
