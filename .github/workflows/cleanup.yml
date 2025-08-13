@@ -1,0 +1,7 @@
+- name: Clean working tree before logging
+  if: always()
+  run: |
+    git reset --hard
+    git clean -fd
+    git fetch origin main
+    git reset --hard origin/main
